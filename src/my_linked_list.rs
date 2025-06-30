@@ -1,4 +1,6 @@
-use std::ptr::null_mut;
+use std::alloc::Layout;
+use std::mem::offset_of;
+use std::{alloc, mem, ptr};
 
 pub struct MyLinkedList<T>{
     head: Option<MyNode<T>>,
@@ -6,7 +8,7 @@ pub struct MyLinkedList<T>{
 
 pub struct MyNode<T>{
     data: T,
-    next: *mut MyNode<T>,
+    next: Option<Box<MyNode<T>>>,
 }
 
 impl<T> MyLinkedList<T> {
@@ -27,21 +29,33 @@ impl<T> MyLinkedList<T> {
         };
     }
 
-    pub fn get(&self, index: usize) -> Option<&T> {
+    pub fn pop(&mut self) -> Option<T> {
         match self.head {
             None => None,
-            Some(ref node) => {
-                node.get(index)
+            Some(ref mut node) if node.next.is_some() => {
+                node.pop_next()
+            },
+            _ => {
+                let mut head = self.head.take().unwrap();
+
+                let node_ptr = &mut head as *mut MyNode<T> as *mut _;
+
+                let data = unsafe {
+                    let addr = (node_ptr as usize) + offset_of!(MyNode<T>, data);
+
+                    ptr::read(addr as *mut T)
+                };
+
+                mem::forget(head);
+
+                Some(data)
             }
         }
     }
-}
 
-impl<T> Drop for MyLinkedList<T> {
-    fn drop(&mut self) {
-        if let Some(node) = self.head.take() {
-            drop(node);
-        }
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.head.as_ref()
+            .map(|node| node.get(index))?
     }
 }
 
@@ -49,17 +63,45 @@ impl<T> MyNode<T> {
     fn new(data: T) -> Self {
         Self{
             data,
-            next: null_mut(),
+            next: None,
         }
     }
 
     fn push_next(&mut self, data: T) {
-        if self.next.is_null() {
-            self.next = Box::into_raw(Box::new(Self::new(data)));
-        } else {
-            unsafe {
-                (*self.next).push_next(data);
-            }
+        match self.next {
+            None => {
+                self.next = Some(Box::new(Self::new(data)));
+            },
+            Some(ref mut node) => {
+                node.push_next(data);
+            },
+        }
+    }
+
+    fn pop_next(&mut self) -> Option<T> {
+        match self.next {
+            None => unreachable!("INTERNAL ERROR"),
+            Some(ref mut node) if node.next.is_some() => {
+                node.pop_next()
+            },
+            _ => {
+                let node = self.next.take().unwrap();
+
+                let node_ptr = Box::into_raw(node);
+
+                let data = unsafe {
+                    let addr = (node_ptr as usize) + offset_of!(MyNode<T>, data);
+
+                    ptr::read(addr as *mut T)
+                };
+
+                let layout = Layout::new::<MyNode<T>>();
+                unsafe {
+                    alloc::dealloc(node_ptr as *mut _, layout);
+                }
+
+                Some(data)
+            },
         }
     }
 
@@ -68,23 +110,10 @@ impl<T> MyNode<T> {
             return Some(&self.data);
         }
 
-        if self.next.is_null() {
-            return None;
-        }
-
-        unsafe {
-            (*self.next).get(index - 1)
-        }
-    }
-}
-
-impl<T> Drop for MyNode<T> {
-    fn drop(&mut self) {
-        if !self.next.is_null() {
-            unsafe {
-                drop(Box::from_raw(self.next));
-            }
-        }
+        self.next.as_ref()
+            .map(|node| {
+                node.get(index - 1)
+            })?
     }
 }
 
@@ -95,6 +124,8 @@ mod tests {
     #[test]
     fn test_my_linked_list() {
         let mut list = MyLinkedList::new();
+
+        assert_eq!(list.get(0), None);
         
         list.push(1);
         list.push(2);
@@ -103,5 +134,25 @@ mod tests {
         assert_eq!(list.get(0), Some(&1));
         assert_eq!(list.get(1), Some(&2));
         assert_eq!(list.get(2), Some(&3));
+        assert_eq!(list.get(3), None);
+        
+        for i in (1..=3).rev() {
+            let data = list.pop().unwrap();
+            assert_eq!(data, i);
+        }
+    }
+
+    #[test]
+    fn test_my_linked_list_pop_refs_still_valid() {
+        let mut my_vec = MyLinkedList::new();
+
+        my_vec.push(Box::new(1));
+        my_vec.push(Box::new(2));
+        my_vec.push(Box::new(3));
+
+        for i in (1..=3).rev() {
+            let item = my_vec.pop().unwrap();
+            assert_eq!(*item, i);
+        }
     }
 }
