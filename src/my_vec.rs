@@ -54,7 +54,7 @@ impl<T> MyVec<T> {
 
         unsafe {
             let ptr = self.ptr.add(self.len);
-            *ptr = item;
+            ptr::write(ptr, item);
         }
 
         self.len += 1;
@@ -130,5 +130,19 @@ mod tests {
         }
         
         assert_eq!(my_vec.pop(), None);
+    }
+    
+    #[test]
+    fn test_my_vec_pop_refs_still_valid() {
+        let mut my_vec = MyVec::new();
+        
+        my_vec.push(Box::new(1));
+        my_vec.push(Box::new(2));
+        my_vec.push(Box::new(3));
+        
+        for i in (1..=3).rev() {
+            let item = my_vec.pop().unwrap();
+            assert_eq!(*item, i);
+        }
     }
 }
